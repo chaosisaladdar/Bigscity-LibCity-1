@@ -52,6 +52,9 @@ class Batch(object):
                 self.data[key] = torch.LongTensor(np.array(self.data[key])).to(device)
             elif self.feature_name[key] == 'float':
                 self.data[key] = torch.FloatTensor(np.array(self.data[key])).to(device)
+            elif self.feature_name[key] == 'no_tensor':
+                # 这个地方会坑死人的
+                pass
             else:
                 raise TypeError(
                     'Batch to_tensor, only support int, float but you give {}'.format(self.feature_name[key]))

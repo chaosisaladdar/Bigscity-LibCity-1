@@ -1,14 +1,16 @@
 import os
 import time
+from functools import partial
+from logging import getLogger
+
 import numpy as np
 import torch
 from ray import tune
-from logging import getLogger
 from torch.utils.tensorboard import SummaryWriter
+
 from libcity.executor.abstract_executor import AbstractExecutor
-from libcity.utils import get_evaluator, ensure_dir
 from libcity.model import loss
-from functools import partial
+from libcity.utils import get_evaluator, ensure_dir
 
 
 class TrafficStateExecutor(AbstractExecutor):
@@ -367,6 +369,9 @@ class TrafficStateExecutor(AbstractExecutor):
             self.optimizer.zero_grad()
             batch.to_tensor(self.device)
             loss = loss_func(batch)
+            # 这个是我加的，报错了
+            # RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+            loss.requires_grad_(True)
             self._logger.debug(loss.item())
             losses.append(loss.item())
             loss.backward()

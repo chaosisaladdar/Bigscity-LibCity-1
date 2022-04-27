@@ -1,11 +1,13 @@
-import os
-import json
 import datetime
-import pandas as pd
-from libcity.utils import ensure_dir
-from libcity.model import loss
+import json
+import os
 from logging import getLogger
+
+import pandas as pd
+
 from libcity.evaluator.abstract_evaluator import AbstractEvaluator
+from libcity.model import loss
+from libcity.utils import ensure_dir
 
 
 class TrafficStateEvaluator(AbstractEvaluator):
@@ -42,7 +44,9 @@ class TrafficStateEvaluator(AbstractEvaluator):
         if not isinstance(batch, dict):
             raise TypeError('evaluator.collect input is not a dict of user')
         y_true = batch['y_true']  # tensor
+        print(y_true)
         y_pred = batch['y_pred']  # tensor
+        print(y_pred)
         if y_true.shape != y_pred.shape:
             raise ValueError("batch['y_true'].shape is not equal to batch['y_pred'].shape")
         self.len_timeslots = y_true.shape[1]

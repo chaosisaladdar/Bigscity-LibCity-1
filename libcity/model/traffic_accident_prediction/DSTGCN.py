@@ -244,6 +244,7 @@ class DSTGCN(AbstractTrafficStateModel):
         self._logger = getLogger()
         # 4.初始化device（必须）
         self.device = config.get('device', torch.device('cpu'))
+        self.batch_size = config.get('batch_size', 1)
         # 5.初始化输入输出时间步的长度（非必须）
         # self.input_window = config.get('input_window', 1)
         # self.output_window = config.get('output_window', 1)
@@ -266,24 +267,32 @@ class DSTGCN(AbstractTrafficStateModel):
         # 模型输入的数据的特征维度应该等于self.feature_dim
         # x = batch['X']  # shape = (batch_size, input_length, ..., feature_dim)
         # 例如: y = batch['y'] / X_ext = batch['X_ext'] / y_ext = batch['y_ext']]
-        g = batch['g']
-        bg = g[0]
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        bg = bg.to(device)
-        spatial_features = batch['spatial_features']
-        s_f = spatial_features[0]
-        temporal_features = batch['temporal_features']
-        t_f = temporal_features[0]
-        external_features = batch['external_features']
-        e_f = external_features[0]
+        # g = batch['g']
+        # bg = g[0]
+        # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        # bg = bg.to(device)
+        # spatial_features = batch['spatial_features']
+        # s_f = spatial_features[0]
+        # temporal_features = batch['temporal_features']
+        # t_f = temporal_features[0]
+        # external_features = batch['external_features']
+        # e_f = external_features[0]
         # 2.根据输入数据计算模型的输出结果
         # 模型输出的结果的特征维度应该等于self.output_dim
         # 模型输出的结果的其他维度应该跟batch['y']一致，只有特征维度可能不同（因为batch['y']可能包含一些外部特征）
         # 如果模型的单步预测，batch['y']是多步的数据，则时间维度也有可能不同
         # 例如: outputs = self.model(x)
-        outputs = self.dstgcn.forward(bg, s_f, t_f, e_f)
+        # outputs = self.dstgcn.forward(bg, s_f, t_f, e_f)
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        outputs = []
         # 3.返回输出结果
         # 例如: return outputs
+        for i in range(len(batch['g'])):
+            g, s_f, t_f, e_f \
+                = batch['g'][i].to(device), batch['spatial_features'][i].to(device), batch['temporal_features'][i].to(
+                device), batch['external_features'][i].to(device)
+            outputs.append(self.dstgcn.forward(g, s_f, t_f, e_f))
+        outputs = torch.FloatTensor(outputs).to(device)
         return outputs
 
     def calculate_loss(self, batch):
@@ -295,7 +304,6 @@ class DSTGCN(AbstractTrafficStateModel):
         # 1.取出真值 ground_truth
         # y_true = batch['y']
         y_true = batch['y']
-        y_true = y_true[0]
         # 2.取出预测值
         y_predicted = self.predict(batch)
         # 3.使用self._scaler将进行了归一化的真值和预测值进行反向归一化（必须）

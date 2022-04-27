@@ -1,4 +1,5 @@
 import csv
+import datetime
 import math
 import os
 import sys
@@ -8,9 +9,10 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
+from tqdm import *
 
 from libcity.data.dataset import TrafficStateDataset
-from libcity.data.utils import generate_dataloader_pad
+from libcity.data.utils import generate_dataloader
 # scaler
 from libcity.utils import MinMax01Scaler
 
@@ -19,6 +21,22 @@ x_pi = 3.14159265358979324 * 3000.0 / 180.0
 pi = 3.1415926535897932384626  # π
 a = 6378245.0  # 长半轴
 ee = 0.00669342162296594323  # 偏心率平方
+
+
+def fill_speed(speed_data):
+    date_range = pd.date_range(start="2018-08-01", end="2018-11-01", freq="1H")[:-1]
+    speed_data = speed_data.resample(rule="1H").mean()
+    assert date_range[0] in speed_data.index and date_range[-1] in speed_data.index
+    one_week, two_week = datetime.timedelta(days=7), datetime.timedelta(days=14)
+    for date in tqdm(date_range, 'Fill speed'):
+        if any(speed_data.loc[date].isna()):
+            for idx in [date - one_week, date + one_week, date - two_week, date + two_week]:
+                if idx in speed_data.index and all(speed_data.loc[idx].notna()):
+                    speed_data.loc[date] = speed_data.loc[idx]
+                    break
+            else:
+                raise ValueError(f"not find time slot for {date}")
+    return speed_data
 
 
 def ValidDate(date):
@@ -128,7 +146,7 @@ class DSTGCNDataset(TrafficStateDataset):
         # 我怀疑是这个东西不停读一堆图进去把内存在炸了，要是炸了我就把里面默认的给删了，跑个两跳的数据
         # 这里也暂时改一下
         # self.k_order = self.config.get('K_hop', 2)
-        self.k_order = 2
+        self.k_order = self.config.get('k_order', 2)
         self.sf_mean = np.array(self.config.get('spatial_features_mean', 0))
         self.sf_std = np.array(self.config.get('spatial_features_std', 0))
         self.tf_mean = np.array(self.config.get('temporal_features_mean', 0))
@@ -139,11 +157,11 @@ class DSTGCNDataset(TrafficStateDataset):
         self.cache_dataset = False
         # self.batch_size = self.config.get('batch_size', 1)
         # 这个地方改一下
-        self.batch_size = 1
+        self.batch_size = self.config.get('batch_size', 1)
         self.grid_len_row = self.config.get('grid_len_row', 242)
         self.grid_len_column = self.config.get('grid_len_column', 236)
-        print('******************************')
-        print(self.data_path)
+        # print('******************************')
+        # print(self.data_path)
         if os.path.exists(self.data_path + self.geo_file + '.geo'):
             self._load_geo()
         else:
@@ -165,8 +183,8 @@ class DSTGCNDataset(TrafficStateDataset):
             self._load_ext()
         else:
             raise ValueError('Not found .ext file!')
-        self.feature_name = {'g': 'no_tensor', 'spatial_features': 'no_pad_float', 'temporal_features': 'no_pad_float',
-                             'external_features': 'no_pad_float', 'y': 'no_pad_float'}
+        self.feature_name = {'g': 'no_tensor', 'spatial_features': 'no_tensor', 'temporal_features': 'no_tensor',
+                             'external_features': 'no_tensor', 'y': 'float'}
 
     def _load_geo(self):
         #  载入节点
@@ -243,7 +261,7 @@ class DSTGCNDataset(TrafficStateDataset):
         # self._logger.info("Loading file " + filename + '.grid')
         # grid_file = open(self.data_path + filename + '.grid', encoding='utf-8')
         # speed_data = {}
-        time_index = pd.date_range(start="20180801000000", end="20181031230000", freq="H")  # freq="D"表示频率为每一天
+        # time_index = pd.date_range(start="20180801000000", end="20181031230000", freq="H")  # freq="D"表示频率为每一天
         # for i in range(self.grid_len_row + 1):
         #     for j in range(self.grid_len_column + 1):
         #         speed_data[str(i) + ',' + str(j)] = []
@@ -259,11 +277,13 @@ class DSTGCNDataset(TrafficStateDataset):
         # 测试阶段方便起见，用下面代码读入速度
         # 不可行，直接读csv会出现时间戳错误
         # 还是有问题, 还是识别不了
-        speed = pd.read_csv(self.data_path + 'speed.csv', index_col=0)
+        # speed = pd.read_csv(self.data_path + 'speed.csv', index_col=0)
         # speed.iloc[0, 0] = "date"
         # speed.drop(['date'], axis=1, inplace=True)
-        speed_data = speed.to_dict(orient='list')
-        self.speed = pd.DataFrame(speed_data, time_index)
+        # speed_data = speed.to_dict(orient='list')
+        # self.speed = pd.DataFrame(speed_data, time_index)
+        read_speed = pd.read_hdf(self.data_path + 'all_grids_speed.h5')
+        self.speed = fill_speed(read_speed)
 
     def _load_ext(self):
         """
@@ -333,6 +353,7 @@ class DSTGCNDataset(TrafficStateDataset):
         g_list, s_f_list, t_f_list, e_f_list, target_list = [], [], [], [], []
         for sample_id in range(self.sample_num):
             accident_time, node_id, target = self.accident.iloc[sample_id]
+            target = float(target)
             accident_time = pd.Timestamp(accident_time)
             # get neighbors
             neighbors = nx.single_source_shortest_path_length(self.network, node_id, cutoff=self.k_order)
@@ -414,21 +435,19 @@ class DSTGCNDataset(TrafficStateDataset):
         num_val = self.sample_num - num_test - num_train
 
         # train
-        g_train, s_f_train, t_f_train, e_f_train, target_train = g_list[:num_train], s_f_list[:num_train], t_f_list[
-                                                                                                           :num_train], e_f_list[
-                                                                                                                        :num_train], target_list[
-                                                                                                                                     :num_train]
+        g_train, s_f_train, t_f_train, e_f_train, target_train \
+            = g_list[:num_train], s_f_list[:num_train], t_f_list[:num_train], e_f_list[:num_train], target_list[
+                                                                                                    :num_train]
         # val
-        g_val, s_f_val, t_f_val, e_f_val, target_val = g_list[num_train: num_train + num_val], s_f_list[
-                                                                                               num_train: num_train + num_val], t_f_list[
-                                                                                                                                num_train: num_train + num_val], e_f_list[
-                                                                                                                                                                 num_train: num_train + num_val], target_list[
-                                                                                                                                                                                                  num_train: num_train + num_val]
+        g_val, s_f_val, t_f_val, e_f_val, target_val \
+            = g_list[num_train: num_train + num_val], s_f_list[num_train: num_train + num_val], t_f_list[
+                                                                                                num_train: num_train + num_val], e_f_list[
+                                                                                                                                 num_train: num_train + num_val], target_list[
+                                                                                                                                                                  num_train: num_train + num_val]
         # test
-        g_test, s_f_test, t_f_test, e_f_test, target_test = g_list[-num_test:], s_f_list[-num_test:], t_f_list[
-                                                                                                      -num_test:], e_f_list[
-                                                                                                                   -num_test:], target_list[
-                                                                                                                                -num_test:]
+        g_test, s_f_test, t_f_test, e_f_test, target_test \
+            = g_list[-num_test:], s_f_list[-num_test:], t_f_list[-num_test:], e_f_list[-num_test:], target_list[
+                                                                                                    -num_test:]
 
         return g_train, s_f_train, t_f_train, e_f_train, target_train, g_val, s_f_val, t_f_val, e_f_val, target_val, g_test, s_f_test, t_f_test, e_f_test, target_test
 
@@ -468,8 +487,8 @@ class DSTGCNDataset(TrafficStateDataset):
         test_data = list(zip(g_test, s_f_test, t_f_test, e_f_test, target_test))
         # 转Dataloader
         self.train_dataloader, self.eval_dataloader, self.test_dataloader = \
-            generate_dataloader_pad(train_data, eval_data, test_data, self.feature_name,
-                                    self.batch_size, self.num_workers)
+            generate_dataloader(train_data, eval_data, test_data, self.feature_name,
+                                self.batch_size, self.num_workers)
         self.num_batches = len(self.train_dataloader)
         return self.train_dataloader, self.eval_dataloader, self.test_dataloader
 
